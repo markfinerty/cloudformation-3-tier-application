@@ -24,6 +24,10 @@ The stack deploys the following key components:
 
 ---
 
+## AWS CloudFormation Canvas Representation
+![Canvas Image](./infrastructure-composer-template.yaml.png)
+
+---
 ## Prerequisites
 
 Before deploying this template, ensure you have the following:
@@ -54,8 +58,3 @@ Ensure the CloudFormation template file (`3-tier-web-app-v1.yaml`) is saved loca
         * `DBUser`: Master username for RDS (default: `admin`).
         * `DBPassword`: Master password for RDS (default: `97A8d4c1d98fb5d5`). **Note: It is highly recommended to change this default password.**
 6.  Complete the remaining steps, acknowledge the creation of IAM resources (if any future version includes them), and click **Create stack**.
-
----
-
-## AWS CloudFormation Canvas Representation
-![Canvas Image](./infrastructure-composer-template.yaml.png)
