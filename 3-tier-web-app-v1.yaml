@@ -1,0 +1,424 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Demo 3-Tier Applcation using CloudFormation
+
+# ----------------------------------------------------------------------------------
+# PARAMETERS
+# ----------------------------------------------------------------------------------
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: "Enter the KeyName of the key pair that will contain the SSH public key file used to connect to the EC2 instance(s)."
+
+  WebServerInstanceType:
+    Type: String
+    Description: AWS EC2 instance type for the Web tier.
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+
+  AppServerInstanceType:
+    Type: String
+    Description: EC2 instance type for the Application/Logic tier.
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+
+  DBUser:
+    Type: String
+    Default: admin
+    Description: Admin username for the RDS database.
+
+  DBPassword:
+    Type: String
+    Default: 97A8d4c1d98fb5d5
+    Description: Admin password for the RDS database.
+    NoEcho: true
+
+# ----------------------------------------------------------------------------------
+# MAPPINGS
+# ----------------------------------------------------------------------------------
+Mappings:
+  RegionMap:
+    ca-central-1:
+      AMI: ami-09e7fb5d565f22127
+    us-east-1:
+      AMI: ami-0fa3fe0fa7920f68e
+    us-west-2:
+      AMI: ami-025ca978d4c1d9825
+
+# ----------------------------------------------------------------------------------
+# RESOURCES
+# ----------------------------------------------------------------------------------
+Resources:
+  # ----------------------------------------------------------------------------------
+  #  VPC and Subnet Configuration
+  # ----------------------------------------------------------------------------------
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.0.0.0/16"
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+
+  AppPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+
+  AppPrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+
+  DBPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.5.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+
+  DBPrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.6.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+
+  # ----------------------------------------------------------------------------------
+  # Public Internet Gateway and Route Tables
+  # ----------------------------------------------------------------------------------
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0 # Required for public subnet - allows internet access for ALB and NAT Gateway
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # ----------------------------------------------------------------------------------
+  # Private NAT Gateway 1 and Route Tables
+  # ----------------------------------------------------------------------------------
+  NatGatewayEIP1:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway1:
+    Type: AWS::EC2::NatGateway # Depends on the IGW being attached for the public subnet to work
+    DependsOn: AttachGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP1.AllocationId
+      SubnetId: !Ref PublicSubnet1 # **CRITICAL: NAT Gateway must live in a Public Subnet**
+
+  AppPrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  AppPrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref AppPrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1 # Route all traffic to the NAT Gateway 1
+
+  AppPrivateRouteTable1SNAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref AppPrivateSubnet1
+      RouteTableId: !Ref AppPrivateRouteTable1
+
+  # ----------------------------------------------------------------------------------
+  # Private NAT Gateway 2 and Route Tables
+  # ----------------------------------------------------------------------------------
+  NatGatewayEIP2:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway2:
+    Type: AWS::EC2::NatGateway
+    DependsOn: AttachGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP2.AllocationId
+      SubnetId: !Ref PublicSubnet2
+
+  AppPrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  AppPrivateRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref AppPrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway2 # Route all traffic to the NAT Gateway 2
+
+  AppPrivateRouteTable2SNAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref AppPrivateSubnet2
+      RouteTableId: !Ref AppPrivateRouteTable2
+
+  # ----------------------------------------------------------------------------------
+  # SECURITY GROUPS
+  # ----------------------------------------------------------------------------------
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP/HTTPS access from the internet to the Web Tier
+      VpcId: !Ref VPC
+      GroupName: WebSecurityGroup
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic ONLY from the Web Tier to the Application Tier
+      VpcId: !Ref VPC
+      GroupName: AppSecurityGroup
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref WebSecurityGroup
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow database access ONLY from the Application Tier
+      VpcId: !Ref VPC
+      GroupName: DBSecurityGroup
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+
+  # ----------------------------------------------------------------------------------
+  # WEB TIER LAUNCH TEMPLATE AND LOAD BALANCING/AUTO SCALING GROUP
+  # ----------------------------------------------------------------------------------
+  WebLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        SecurityGroupIds:
+          - !Ref WebSecurityGroup
+        ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMI]
+        InstanceInitiatedShutdownBehavior: terminate
+        InstanceType: !Ref WebServerInstanceType
+        KeyName: !Ref KeyName
+        UserData:
+          "Fn::Base64": |
+            #!/bin/bash
+            yum update -y
+            yum install -y httpd
+            systemctl start httpd
+            systemctl enable httpd
+            groupadd www
+            usermod -aG www ec2-user
+            chown -R root:www /var/www/html
+            chmod 2775 /var/www
+            find /var/www -type d -exec chmod 2775 {} \;
+            find /var/www -type f -exec chmod 0664 {} \;
+            echo "<h1>CloudFormation Demo 3-Tier Web App</h1>" > /var/www/html/index.html
+
+  WebTargetGroup: # Defines the group of EC2 instances that will receive traffic from the WebLoadBalancer
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VPC
+      Port: 80
+      Protocol: HTTP
+      HealthCheckPath: /index.html
+      TargetType: instance
+
+  WebLoadBalancer: # The public, internet-facing load balancer. It must be placed across the Public Subnets
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref WebSecurityGroup
+
+  WebListener: # Listens for traffic on port 80 and forwards it to the WebTargetGroup
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref WebLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebTargetGroup
+
+  WebAutoScalingGroup: # Launches the EC2 instances across the Public Subnets using the WebLaunchTemplate
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WebLaunchTemplate
+        Version: !GetAtt WebLaunchTemplate.DefaultVersionNumber
+      MinSize: "1"
+      MaxSize: "2"
+      DesiredCapacity: "2"
+      TargetGroupARNs:
+        - !Ref WebTargetGroup
+
+  # ----------------------------------------------------------------------------------
+  # APP TIER LAUNCH TEMPLATE AND AUTO SCALING GROUP
+  # ----------------------------------------------------------------------------------
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMI]
+        InstanceType: !Ref AppServerInstanceType
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - !Ref AppSecurityGroup
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            # Install application dependencies (e.g., Python, Java runtime, etc.)
+            yum update -y
+            # Placeholder: In a real app, business logic would be deployed here.
+            echo "Application Logic Server is running." > /tmp/app_status
+
+  AppAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref AppPrivateSubnet1
+        - !Ref AppPrivateSubnet2
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AppLaunchTemplate
+        Version: !GetAtt AppLaunchTemplate.DefaultVersionNumber
+      MinSize: "1"
+      MaxSize: "2"
+      DesiredCapacity: "2"
+
+  # ----------------------------------------------------------------------------------
+  # DB TIER LAUNCH TEMPLATE (RDS DATABASE)
+  # ----------------------------------------------------------------------------------
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS Database
+      SubnetIds:
+        - !Ref DBPrivateSubnet1
+        - !Ref DBPrivateSubnet2
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete # ** CRITICAL: Ensure instance is deleted when stack is deleted **
+    Properties:
+      Engine: mysql
+      AutoMinorVersionUpgrade: true
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: "20"
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DBSecurityGroup
+      MultiAZ: "true" # High availability and resilience
+      PubliclyAccessible: "false" # **CRITICAL: Ensure it's private **
+
+# ----------------------------------------------------------------------------------
+# OUTPUTS
+# ----------------------------------------------------------------------------------
+Outputs:
+  VPCId:
+    Description: The ID of the newly created VPC
+    Value: !Ref VPC
+
+  PublicSubnet1Id:
+    Description: ID of Public Subnet in AZ1
+    Value: !Ref PublicSubnet1
+
+  PublicSubnet2Id:
+    Description: ID of Public Subnet in AZ2
+    Value: !Ref PublicSubnet2
+
+  AppPrivateSubnet1Id:
+    Description: ID of Application Private Subnet in AZ1
+    Value: !Ref AppPrivateSubnet1
+
+  AppPrivateSubnet2Id:
+    Description: ID of Application Private Subnet in AZ2
+    Value: !Ref AppPrivateSubnet2
+
+  DBPrivateSubnet1Id:
+    Description: ID of Database Private Subnet in AZ1
+    Value: !Ref DBPrivateSubnet1
+
+  DBPrivateSubnet2Id:
+    Description: ID of Database Private Subnet in AZ2
+    Value: !Ref DBPrivateSubnet2
+
+  RDSAddress:
+    Description: The private endpoint address for the RDS database
+    Value: !GetAtt RDSInstance.Endpoint.Address
