@@ -37,7 +37,7 @@ Before deploying this template, ensure you have the following:
 
 ---
 
-## 🚀 Deployment
+## Deployment
 
 ### 1. Download the Template
 
